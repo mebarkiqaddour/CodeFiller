@@ -4,7 +4,9 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.Rect
+import android.content.Context
 import android.os.Bundle
+import android.view.inputmethod.InputMethodManager
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
@@ -119,7 +121,16 @@ class FillService : AccessibilityService() {
         windows.any { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
 
     private fun hideKeyboard() {
-        performGlobalAction(GLOBAL_ACTION_DISMISS_SOFT_KEYBOARD)
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(null, 0)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            try {
+                val m = AccessibilityService::class.java.getMethod("getSoftKeyboardController")
+                val ctrl = m.invoke(this)
+                ctrl?.javaClass?.getMethod("setShowMode", Int::class.javaPrimitiveType)
+                    ?.invoke(ctrl, 1) // SHOW_MODE_HIDDEN
+            } catch (_: Exception) {}
+        }
     }
 
     private val loadingWords = listOf("تحقق", "جار", "تحميل", "انتظر", "Loading")
