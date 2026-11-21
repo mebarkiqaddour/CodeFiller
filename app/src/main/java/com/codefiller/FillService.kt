@@ -157,7 +157,6 @@ class FillService : AccessibilityService() {
         // 1) شاشة النجاح: اضغط "أضف رمزا جديدا" فورًا
         val again = find(root) { hasText(it, "أضف رمز") }
         if (again != null) {
-            if (keyboardVisible()) { hideKeyboard(); return }
             val now = System.currentTimeMillis()
             if (phase == Phase.WAIT_RESULT) {
                 val code = State.codes.removeFirst()
