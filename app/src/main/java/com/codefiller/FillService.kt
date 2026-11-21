@@ -27,6 +27,10 @@ class FillService : AccessibilityService() {
     private var baseline: Set<String> = emptySet()
     private var lastAgainClick = 0L
     private var pending = false
+    private var clickAt = 0L
+    private var sawBusy = false
+    private val vanished = HashSet<String>()
+    private val maxWaitMs = 15000L   // شبكة بطيئة جدًا: بعدها يُعتبر الكود مرفوضًا ويتابع
 
     companion object { var instance: FillService? = null }
 
@@ -156,12 +160,20 @@ class FillService : AccessibilityService() {
         val field = find(root) { it.isEditable || it.className?.contains("EditText") == true }
             ?: return
 
-        // 2) ننتظر النتيجة بلا مهلة (بطء الشبكة لا يُعتبر فشلًا)
+        // 2) ننتظر النتيجة: النجاح يُعالج أعلاه، والفشل يُعرف بإحدى الإشارات
         if (phase == Phase.WAIT_RESULT) {
             val cur = HashSet<String>()
             collectTexts(root, cur)
-            val fresh = cur - baseline
-            if (fresh.none { isFailureText(it) }) {
+            val btn = find(root) { hasText(it, "تحقق من الرمز") }
+            val busy = btn == null || !btn.isEnabled          // الطلب قيد التنفيذ
+            if (busy) sawBusy = true
+            vanished.addAll(baseline - cur)                    // نصوص اختفت أثناء التحميل
+            val failed =
+                (cur - baseline).any { isFailureText(it) } ||          // نص جديد (رسالة خطأ)
+                vanished.intersect(cur).any { isFailureText(it) } ||   // رسالة اختفت ثم عادت
+                (sawBusy && !busy) ||                                   // انتهى التحميل بلا نجاح
+                (System.currentTimeMillis() - clickAt > maxWaitMs)      // مهلة أمان طويلة
+            if (!failed) {
                 State.status = "بانتظار النتيجة…"
                 return
             }
@@ -195,6 +207,9 @@ class FillService : AccessibilityService() {
             val snap = HashSet<String>()
             collectTexts(root, snap)
             baseline = snap
+            clickAt = System.currentTimeMillis()
+            sawBusy = false
+            vanished.clear()
             clickNode(btn)
             phase = Phase.WAIT_RESULT
             return
