@@ -1,6 +1,9 @@
 package com.codefiller
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
+import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,7 +15,7 @@ object State {
     var total = 0
     var done = 0
     var running = false
-    var delayMs = 5000L
+    var delayMs = 4000L
     var status = "جاهز"
 }
 
@@ -47,13 +50,26 @@ class FillService : AccessibilityService() {
         return null
     }
 
-    private fun clickNode(n: AccessibilityNodeInfo): Boolean {
+    private fun hasText(n: AccessibilityNodeInfo, s: String) =
+        (n.text?.contains(s) == true) || (n.contentDescription?.contains(s) == true)
+
+    private fun tapAt(n: AccessibilityNodeInfo) {
+        val r = Rect()
+        n.getBoundsInScreen(r)
+        val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
+        val g = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 80))
+            .build()
+        dispatchGesture(g, null, null)
+    }
+
+    private fun clickNode(n: AccessibilityNodeInfo) {
         var cur: AccessibilityNodeInfo? = n
         while (cur != null) {
-            if (cur.isClickable && cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+            if (cur.isClickable && cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
             cur = cur.parent
         }
-        return false
+        tapAt(n)
     }
 
     private val step = object : Runnable {
@@ -70,6 +86,15 @@ class FillService : AccessibilityService() {
                 State.status = "افتح شاشة المفاتيح في التطبيق"
                 h.postDelayed(this, 2000); return
             }
+
+            // شاشة النجاح: اضغط "أضف رمزا جديدا"
+            val again = find(root) { hasText(it, "أضف رمز") }
+            if (again != null) {
+                clickNode(again)
+                State.status = "فتحت حقلًا جديدًا"
+                h.postDelayed(this, 1800); return
+            }
+
             val field = find(root) { it.isEditable || it.className?.contains("EditText") == true }
             if (field == null) {
                 State.status = "لم أجد حقل الرمز، افتح شاشة المفاتيح"
@@ -83,12 +108,9 @@ class FillService : AccessibilityService() {
             State.status = "أدخلت: $code"
             h.postDelayed({
                 if (!State.running) return@postDelayed
-                val r2 = rootInActiveWindow
-                val btn = find(r2) {
-                    (it.text?.contains("تحقق من الرمز") == true) ||
-                    (it.contentDescription?.contains("تحقق من الرمز") == true)
-                }
-                if (btn != null && clickNode(btn)) {
+                val btn = find(rootInActiveWindow) { hasText(it, "تحقق من الرمز") }
+                if (btn != null) {
+                    clickNode(btn)
                     State.codes.removeFirst()
                     State.done++
                     State.status = "تم ${State.done}/${State.total}"
