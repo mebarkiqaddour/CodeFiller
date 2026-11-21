@@ -92,7 +92,11 @@ class FillService : AccessibilityService() {
     private fun tapAt(n: AccessibilityNodeInfo) {
         val r = Rect()
         n.getBoundsInScreen(r)
-        val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
+        val dm = resources.displayMetrics
+        val x = r.exactCenterX().coerceIn(1f, dm.widthPixels - 1f)
+        var y = minOf(r.exactCenterY(), r.top + 60f)
+        y = minOf(y, dm.heightPixels - 200f).coerceAtLeast(1f)
+        val path = Path().apply { moveTo(x, y) }
         val g = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 40))
             .build()
@@ -108,12 +112,8 @@ class FillService : AccessibilityService() {
         tapAt(n)
     }
 
-    // يناوب بين النقر عبر العناصر القابلة للنقر (الأب) والنقر بالإحداثيات
     private var linkAttempts = 0
-    private fun tapLink(n: AccessibilityNodeInfo) {
-        linkAttempts++
-        if (linkAttempts % 2 == 1) clickNode(n) else tapAt(n)
-    }
+    private fun tapLink(n: AccessibilityNodeInfo) { clickNode(n) }
 
     private val loadingWords = listOf("تحقق", "جار", "تحميل", "انتظر", "Loading")
     private fun isFailureText(s: String) =
@@ -149,7 +149,7 @@ class FillService : AccessibilityService() {
                 lastAgainClick = now
                 linkAttempts = 0
                 tapLink(again)
-            } else if (now - lastAgainClick > 300) {
+            } else if (now - lastAgainClick > 400) {
                 phase = Phase.WAIT_FIELD
                 lastAgainClick = now
                 tapLink(again)
