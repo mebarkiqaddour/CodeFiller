@@ -14,30 +14,54 @@ object State {
     var codes = ArrayDeque<String>()
     var total = 0
     var done = 0
+    var ok = 0
     var running = false
-    var delayMs = 4000L
     var status = "جاهز"
 }
 
 class FillService : AccessibilityService() {
     private val h = Handler(Looper.getMainLooper())
 
+    private enum class Phase { IDLE, TYPING, WAIT_RESULT, WAIT_FIELD }
+    private var phase = Phase.IDLE
+    private var baseline: Set<String> = emptySet()
+    private var lastAgainClick = 0L
+    private var pending = false
+
     companion object { var instance: FillService? = null }
 
     override fun onServiceConnected() { instance = this }
-    override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
     override fun onInterrupt() {}
     override fun onDestroy() { instance = null; super.onDestroy() }
+
+    // أي تغيّر في الشاشة يشغّل الفحص فورًا
+    override fun onAccessibilityEvent(e: AccessibilityEvent?) {
+        if (!State.running || pending) return
+        pending = true
+        h.post { pending = false; tick() }
+    }
+
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            if (!State.running) return
+            tick()
+            h.postDelayed(this, 150)
+        }
+    }
 
     fun start() {
         if (State.running) return
         State.running = true
-        h.post(step)
+        State.ok = 0
+        phase = Phase.IDLE
+        lastAgainClick = 0L
+        h.post(heartbeat)
     }
 
     fun stop() {
         State.running = false
         State.status = "متوقف"
+        phase = Phase.IDLE
         h.removeCallbacksAndMessages(null)
     }
 
@@ -53,12 +77,19 @@ class FillService : AccessibilityService() {
     private fun hasText(n: AccessibilityNodeInfo, s: String) =
         (n.text?.contains(s) == true) || (n.contentDescription?.contains(s) == true)
 
+    private fun collectTexts(n: AccessibilityNodeInfo?, out: MutableSet<String>) {
+        if (n == null) return
+        n.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+        n.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+        for (i in 0 until n.childCount) collectTexts(n.getChild(i), out)
+    }
+
     private fun tapAt(n: AccessibilityNodeInfo) {
         val r = Rect()
         n.getBoundsInScreen(r)
         val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
         val g = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 80))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 60))
             .build()
         dispatchGesture(g, null, null)
     }
@@ -72,54 +103,92 @@ class FillService : AccessibilityService() {
         tapAt(n)
     }
 
-    private val step = object : Runnable {
-        override fun run() {
-            if (!State.running) return
-            val code = State.codes.firstOrNull()
-            if (code == null) {
-                State.running = false
-                State.status = "انتهت القائمة (${State.done}/${State.total})"
+    private val loadingWords = listOf("تحقق", "جار", "تحميل", "انتظر", "Loading")
+    private fun isFailureText(s: String) =
+        loadingWords.none { s.contains(it) } && !s.startsWith("NG-")
+
+    private fun finish() {
+        State.running = false
+        phase = Phase.IDLE
+        State.status = "انتهت القائمة: نجح ${State.ok} من ${State.done}"
+    }
+
+    private fun tick() {
+        if (!State.running) return
+        if (phase == Phase.TYPING) return
+        if (State.codes.isEmpty()) { finish(); return }
+
+        val root = rootInActiveWindow ?: return
+        if (root.packageName == packageName) {
+            State.status = "افتح شاشة المفاتيح في التطبيق"
+            return
+        }
+
+        // 1) شاشة النجاح: اضغط "أضف رمزا جديدا" فورًا
+        val again = find(root) { hasText(it, "أضف رمز") }
+        if (again != null) {
+            val now = System.currentTimeMillis()
+            if (phase == Phase.WAIT_RESULT) {
+                val code = State.codes.removeFirst()
+                State.done++
+                State.ok++
+                State.status = "نجح $code (نجح ${State.ok} من ${State.done}/${State.total})"
+                phase = Phase.WAIT_FIELD
+                lastAgainClick = now
+                clickNode(again)
+            } else if (now - lastAgainClick > 800) {
+                phase = Phase.WAIT_FIELD
+                lastAgainClick = now
+                clickNode(again)
+            }
+            return
+        }
+
+        val field = find(root) { it.isEditable || it.className?.contains("EditText") == true }
+            ?: return
+
+        // 2) ننتظر النتيجة بلا مهلة (بطء الشبكة لا يُعتبر فشلًا)
+        if (phase == Phase.WAIT_RESULT) {
+            val cur = HashSet<String>()
+            collectTexts(root, cur)
+            val fresh = cur - baseline
+            if (fresh.none { isFailureText(it) }) {
+                State.status = "بانتظار النتيجة…"
                 return
             }
-            val root = rootInActiveWindow
-            if (root == null || root.packageName == packageName) {
-                State.status = "افتح شاشة المفاتيح في التطبيق"
-                h.postDelayed(this, 2000); return
-            }
-
-            // شاشة النجاح: اضغط "أضف رمزا جديدا"
-            val again = find(root) { hasText(it, "أضف رمز") }
-            if (again != null) {
-                clickNode(again)
-                State.status = "فتحت حقلًا جديدًا"
-                h.postDelayed(this, 1800); return
-            }
-
-            val field = find(root) { it.isEditable || it.className?.contains("EditText") == true }
-            if (field == null) {
-                State.status = "لم أجد حقل الرمز، افتح شاشة المفاتيح"
-                h.postDelayed(this, 2000); return
-            }
-            field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            val args = Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, code)
-            }
-            field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-            State.status = "أدخلت: $code"
-            h.postDelayed({
-                if (!State.running) return@postDelayed
-                val btn = find(rootInActiveWindow) { hasText(it, "تحقق من الرمز") }
-                if (btn != null) {
-                    clickNode(btn)
-                    State.codes.removeFirst()
-                    State.done++
-                    State.status = "تم ${State.done}/${State.total}"
-                    h.postDelayed(this, State.delayMs)
-                } else {
-                    State.status = "لم أجد زر التحقق، سأعيد المحاولة"
-                    h.postDelayed(this, 2000)
-                }
-            }, 900)
+            val code = State.codes.removeFirst()
+            State.done++
+            State.status = "فشل $code (نجح ${State.ok} من ${State.done}/${State.total})"
+            phase = Phase.IDLE
+            if (State.codes.isEmpty()) { finish(); return }
         }
+
+        // 3) أدخل الكود التالي واضغط تحقق فورًا
+        val next = State.codes.first()
+        phase = Phase.TYPING
+        field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, next)
+        }
+        field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        State.status = "أدخلت: $next"
+        h.postDelayed({ pressVerify(0) }, 60)
+    }
+
+    // يضغط "تحقق" بمجرد أن يصبح الزر مفعّلًا
+    private fun pressVerify(attempt: Int) {
+        if (!State.running) return
+        val root = rootInActiveWindow
+        val btn = find(root) { hasText(it, "تحقق من الرمز") }
+        if (btn != null && (btn.isEnabled || attempt >= 25)) {
+            val snap = HashSet<String>()
+            collectTexts(root, snap)
+            baseline = snap
+            clickNode(btn)
+            phase = Phase.WAIT_RESULT
+            return
+        }
+        if (attempt >= 60) { phase = Phase.IDLE; return }   // أعد المحاولة من البداية
+        h.postDelayed({ pressVerify(attempt + 1) }, 40)
     }
 }
