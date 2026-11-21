@@ -115,6 +115,13 @@ class FillService : AccessibilityService() {
     private var linkAttempts = 0
     private fun tapLink(n: AccessibilityNodeInfo) { clickNode(n) }
 
+    private fun keyboardVisible(): Boolean =
+        windows.any { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+
+    private fun hideKeyboard() {
+        performGlobalAction(GLOBAL_ACTION_DISMISS_SOFT_KEYBOARD)
+    }
+
     private val loadingWords = listOf("تحقق", "جار", "تحميل", "انتظر", "Loading")
     private fun isFailureText(s: String) =
         loadingWords.none { s.contains(it) } && !s.startsWith("NG-")
@@ -139,6 +146,7 @@ class FillService : AccessibilityService() {
         // 1) شاشة النجاح: اضغط "أضف رمزا جديدا" فورًا
         val again = find(root) { hasText(it, "أضف رمز") }
         if (again != null) {
+            if (keyboardVisible()) { hideKeyboard(); return }
             val now = System.currentTimeMillis()
             if (phase == Phase.WAIT_RESULT) {
                 val code = State.codes.removeFirst()
@@ -194,6 +202,7 @@ class FillService : AccessibilityService() {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, next)
         }
         field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        hideKeyboard()
         State.status = "أدخلت: $next"
         h.postDelayed({ pressVerify(0) }, 60)
     }
