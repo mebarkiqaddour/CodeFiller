@@ -89,7 +89,7 @@ class FillService : AccessibilityService() {
         n.getBoundsInScreen(r)
         val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
         val g = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 60))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 40))
             .build()
         dispatchGesture(g, null, null)
     }
@@ -100,6 +100,12 @@ class FillService : AccessibilityService() {
             if (cur.isClickable && cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
             cur = cur.parent
         }
+        tapAt(n)
+    }
+
+    // ضغط الرابط نفسه، وإلا نقرة مباشرة على إحداثياته (بدون صعود للحاويات)
+    private fun tapLink(n: AccessibilityNodeInfo) {
+        if (n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
         tapAt(n)
     }
 
@@ -135,11 +141,11 @@ class FillService : AccessibilityService() {
                 State.status = "نجح $code (نجح ${State.ok} من ${State.done}/${State.total})"
                 phase = Phase.WAIT_FIELD
                 lastAgainClick = now
-                clickNode(again)
-            } else if (now - lastAgainClick > 800) {
+                tapLink(again)
+            } else if (now - lastAgainClick > 350) {
                 phase = Phase.WAIT_FIELD
                 lastAgainClick = now
-                clickNode(again)
+                tapLink(again)
             }
             return
         }
