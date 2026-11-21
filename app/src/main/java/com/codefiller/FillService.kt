@@ -55,6 +55,7 @@ class FillService : AccessibilityService() {
         State.ok = 0
         phase = Phase.IDLE
         lastAgainClick = 0L
+        linkAttempts = 0
         h.post(heartbeat)
     }
 
@@ -103,10 +104,11 @@ class FillService : AccessibilityService() {
         tapAt(n)
     }
 
-    // ضغط الرابط نفسه، وإلا نقرة مباشرة على إحداثياته (بدون صعود للحاويات)
+    // يناوب بين النقر عبر العناصر القابلة للنقر (الأب) والنقر بالإحداثيات
+    private var linkAttempts = 0
     private fun tapLink(n: AccessibilityNodeInfo) {
-        if (n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
-        tapAt(n)
+        linkAttempts++
+        if (linkAttempts % 2 == 1) clickNode(n) else tapAt(n)
     }
 
     private val loadingWords = listOf("تحقق", "جار", "تحميل", "انتظر", "Loading")
@@ -141,8 +143,9 @@ class FillService : AccessibilityService() {
                 State.status = "نجح $code (نجح ${State.ok} من ${State.done}/${State.total})"
                 phase = Phase.WAIT_FIELD
                 lastAgainClick = now
+                linkAttempts = 0
                 tapLink(again)
-            } else if (now - lastAgainClick > 350) {
+            } else if (now - lastAgainClick > 300) {
                 phase = Phase.WAIT_FIELD
                 lastAgainClick = now
                 tapLink(again)
@@ -168,6 +171,8 @@ class FillService : AccessibilityService() {
             phase = Phase.IDLE
             if (State.codes.isEmpty()) { finish(); return }
         }
+
+        linkAttempts = 0
 
         // 3) أدخل الكود التالي واضغط تحقق فورًا
         val next = State.codes.first()
